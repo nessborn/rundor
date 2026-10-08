@@ -33,7 +33,6 @@ const state = {
   fetchedRadiusKm: 0,
   routes: [],
   visible: [],
-  surfaceFilter: 'all',
   litOnly: false,
   generated: null,
   selectedId: null,
@@ -49,7 +48,7 @@ const els = {
   detail: $('detail'), searchAreaBtn: $('searchAreaBtn'), locateBtn: $('locateBtn'),
   searchForm: $('searchForm'), searchInput: $('searchInput'), suggestions: $('suggestions'),
   panel: $('panel'), sheetHandle: $('sheetHandle'),
-  surfaceChips: $('surfaceChips'), litToggle: $('litToggle'), generateBtn: $('generateBtn'), generateKm: $('generateKm'),
+  litToggle: $('litToggle'), generateBtn: $('generateBtn'), generateKm: $('generateKm'),
   installBtn: $('installBtn'),
 };
 
@@ -698,7 +697,7 @@ function applyFilters({ fitView = false } = {}) {
 
   state.visible = state.routes
     .filter((r) => weights[r.type] != null && r.length >= minM && r.length <= maxM)
-    .filter((r) => (state.surfaceFilter === 'all' || r.surface === state.surfaceFilter) && (!state.litOnly || r.lit))
+    .filter((r) => !state.litOnly || r.lit)
     .map((r) => {
       r.distanceFromCenter = Math.min(...[r.path[0], r.centroid].map((p) => haversine(center, p)));
       return r;
@@ -715,9 +714,8 @@ function applyFilters({ fitView = false } = {}) {
 
   if (!state.visible.length) {
     const any = state.routes.some((r) => weights[r.type] != null);
-    const filtered = state.surfaceFilter !== 'all' || state.litOnly;
-    setStatus(filtered
-      ? 'Inga rundor matchar underlag/belysning här. Prova att ta bort ett filter – eller skapa en egen runda.'
+    setStatus(state.litOnly
+      ? 'Inga belysta rundor här. Prova utan "Bara belysta" – eller skapa en egen runda.'
       : any
         ? `Inga rundor på ${fmtRange(state.min, state.max)} här. Prova ett annat distansintervall, flytta kartan eller skapa en egen runda.`
         : 'Hittade inga kartlagda rundor i området. Flytta kartan, sök på en annan plats eller skapa en egen runda.');
@@ -871,9 +869,6 @@ function clearSelection(restyle = true) {
 
 function renderDetail(r) {
   const start = r.path[0];
-  const directions = state.userPos
-    ? `https://www.openstreetmap.org/directions?engine=fossgis_osrm_foot&route=${state.userPos[0]}%2C${state.userPos[1]}%3B${start[0]}%2C${start[1]}`
-    : `https://www.openstreetmap.org/?mlat=${start[0]}&mlon=${start[1]}#map=16/${start[0]}/${start[1]}`;
   els.detail.innerHTML = `
     <div class="detail-head">
       <div>
@@ -892,14 +887,11 @@ function renderDetail(r) {
     <svg class="profile" id="profile" viewBox="0 0 300 72" preserveAspectRatio="none" aria-label="Höjdprofil"></svg>
     <div class="profile-note" id="profileNote">Hämtar höjdprofil…</div>
     <div class="detail-actions">
-      <a class="btn primary" href="${directions}" target="_blank" rel="noopener">Vägbeskrivning till start</a>
-      <button class="btn" type="button" id="gpxBtn">Ladda ner GPX</button>
-      ${r.generated ? '<button class="btn" type="button" id="variantBtn">Ny variant</button>' : ''}
+      ${r.generated ? '<button class="btn primary" type="button" id="variantBtn">Ny variant</button>' : ''}
       ${r.source ? `<a class="btn" href="${r.source.url}" target="_blank" rel="noopener">${r.source.label}</a>` : ''}
     </div>`;
   els.detail.hidden = false;
   els.detail.querySelector('.close-btn').addEventListener('click', () => clearSelection());
-  els.detail.querySelector('#gpxBtn').addEventListener('click', () => downloadGpx(r));
   els.detail.querySelector('#variantBtn')?.addEventListener('click', () => createGeneratedRoute());
   if (r.elevation) drawElevation(r);
 }
@@ -973,27 +965,6 @@ function drawElevation(r) {
   $('profile').innerHTML = `<path class="area" d="${line}L300 72L0 72Z"/><path class="lineP" d="${line}" vector-effect="non-scaling-stroke"/>`;
   $('elevGain').textContent = `${Math.round(gain)} m`;
   $('profileNote').textContent = `Lägst ${Math.round(minE)} m · Högst ${Math.round(maxE)} m ö.h.`;
-}
-
-// ---------- GPX export ----------
-function downloadGpx(r) {
-  const pts = r.path.map((p) => `      <trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('\n');
-  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Rundor" xmlns="http://www.topografix.com/GPX/1/1">
-  <metadata><name>${escapeHtml(r.name)}</name><copyright author="OpenStreetMap contributors"><license>https://opendatacommons.org/licenses/odbl/</license></copyright></metadata>
-  <trk>
-    <name>${escapeHtml(r.name)}</name>
-    <trkseg>
-${pts}
-    </trkseg>
-  </trk>
-</gpx>`;
-  const blob = new Blob([gpx], { type: 'application/gpx+xml' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${r.name.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'runda'}.gpx`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 // ---------- Filters UI ----------
@@ -1161,15 +1132,7 @@ els.suggestions.addEventListener('mousedown', (e) => {
 });
 els.searchInput.addEventListener('blur', () => setTimeout(() => { els.suggestions.hidden = true; }, 150));
 
-// ---------- Surface and lighting filters ----------
-els.surfaceChips.addEventListener('click', (e) => {
-  const b = e.target.closest('button');
-  if (!b || b.dataset.surface === state.surfaceFilter) return;
-  state.surfaceFilter = b.dataset.surface;
-  els.surfaceChips.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
-  clearSelection(false);
-  applyFilters();
-});
+// ---------- Lighting filter ----------
 els.litToggle.addEventListener('change', () => {
   state.litOnly = els.litToggle.checked;
   clearSelection(false);

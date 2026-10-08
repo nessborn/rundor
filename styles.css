@@ -169,8 +169,6 @@ a { color: var(--accent); }
 }
 .chips button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 
-.surface-chips { margin-top: 12px; }
-.chips button[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .filter-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; color: var(--ink-2); cursor: pointer; }
 .toggle input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
