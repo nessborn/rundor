@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Rundor nära dig</title>
+  <meta name="description" content="Hitta populära löp-, promenad- och cykelrundor nära dig, baserat på öppen data från OpenStreetMap.">
+  <meta name="theme-color" content="#fc4c02">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="styles.css?v=7">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand"><span class="logo" aria-hidden="true"></span><span>Rundor</span></div>
+      <form class="search" id="searchForm" autocomplete="off" role="search">
+        <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.2 4.2-1.4 1.4-4.2-4.2A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/></svg>
+        <input id="searchInput" type="search" placeholder="Sök plats, t.ex. Hagaparken" aria-label="Sök plats" aria-autocomplete="list" aria-controls="suggestions">
+        <ul id="suggestions" class="suggestions" role="listbox" hidden></ul>
+      </form>
+      <button id="locateBtn" class="icon-btn" type="button" title="Min position" aria-label="Gå till min position">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm-1-7h2v3.06A8 8 0 0 1 19.94 11H23v2h-3.06A8 8 0 0 1 13 19.94V23h-2v-3.06A8 8 0 0 1 4.06 13H1v-2h3.06A8 8 0 0 1 11 4.06V1Zm1 5a6 6 0 1 0 0 12 6 6 0 0 0 0-12Z"/></svg>
+      </button>
+    </header>
+
+    <main class="layout">
+      <aside class="panel" id="panel" aria-label="Rundor">
+        <button class="sheet-handle" id="sheetHandle" type="button" aria-label="Visa fler rundor"><span></span></button>
+
+        <section class="filters">
+          <div class="seg" id="activitySeg" role="radiogroup" aria-label="Aktivitet">
+            <button type="button" role="radio" data-activity="run" aria-checked="true">Löpning</button>
+            <button type="button" role="radio" data-activity="walk" aria-checked="false">Promenad</button>
+            <button type="button" role="radio" data-activity="bike" aria-checked="false">Cykel</button>
+          </div>
+
+          <div class="range-block">
+            <div class="range-head"><span>Distans</span><strong id="rangeLabel">5–7 km</strong></div>
+            <div class="dual-range">
+              <div class="dual-track"><div class="dual-fill" id="rangeFill"></div></div>
+              <input type="range" id="minRange" min="1" max="40" step="0.5" value="5" aria-label="Minsta distans">
+              <input type="range" id="maxRange" min="1" max="40" step="0.5" value="7" aria-label="Största distans">
+            </div>
+            <div class="chips" id="presetChips">
+              <button type="button" data-min="2" data-max="4">2–4</button>
+              <button type="button" data-min="5" data-max="7">5–7</button>
+              <button type="button" data-min="8" data-max="12">8–12</button>
+              <button type="button" data-min="13" data-max="21">13–21</button>
+              <button type="button" data-min="21" data-max="40">21+</button>
+            </div>
+          </div>
+
+          <div class="list-head">
+            <span id="resultCount" aria-live="polite"></span>
+            <label class="sort">
+              <span class="visually-hidden">Sortera</span>
+              <select id="sortSelect">
+                <option value="popular">Mest populära</option>
+                <option value="near">Närmast</option>
+                <option value="length">Längd</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <div id="status" class="status" role="status"></div>
+        <ol id="routeList" class="route-list"></ol>
+
+        <footer class="data-note">
+          Ruttdata © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap-bidragsgivare</a> (ODbL) via Overpass ·
+          Höjd: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> ·
+          Sök: <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a>.
+          GPS-spår: publika spår uppladdade till <a href="https://www.openstreetmap.org/traces" target="_blank" rel="noopener">OpenStreetMap</a>.
+          Officiella leder: <a href="https://www.naturvardsverket.se/amnesomraden/friluftsliv/leder/" target="_blank" rel="noopener">Naturvårdsverket</a> ·
+          Banor: <a href="https://www.parkrun.com/" target="_blank" rel="noopener">parkrun</a>.
+          ”Populär” vägs ihop av GPS-spår som följer rundan, officiell led/parkrun-bana och OSM-taggar (namn, belysning, skyltning, slinga).
+        </footer>
+      </aside>
+
+      <div class="map-wrap">
+        <div id="map" aria-label="Karta"></div>
+        <button id="searchAreaBtn" class="search-area" type="button" hidden>Sök i det här området</button>
+        <article id="detail" class="detail" hidden></article>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js?v=7"></script>
+</body>
+</html>
