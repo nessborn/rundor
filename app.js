@@ -10,6 +10,7 @@ const FALLBACK_CENTER = [59.3293, 18.0686]; // Stockholm
 const TOP_POPULAR = 3;
 
 const TYPE_LABELS = {
+  generated: 'Egen runda',
   running: 'Löpslinga',
   fitness_trail: 'Motionsspår',
   nordic: 'Elljus-/skidspår',
@@ -17,20 +18,13 @@ const TYPE_LABELS = {
   hiking: 'Vandringsled',
   foot: 'Promenadled',
   walking: 'Promenadled',
-  bicycle: 'Cykelled',
-  mtb: 'MTB-led',
 };
 
-// Which route types are shown per activity and how strongly each is preferred.
-const ACTIVITY_WEIGHTS = {
-  run: { running: 3, fitness_trail: 3, nordic: 2.5, path: 1.8, hiking: 1.4, foot: 1.4, walking: 1.4 },
-  walk: { walking: 3, foot: 3, hiking: 2.6, fitness_trail: 2.2, nordic: 1.8, path: 2, running: 1.6 },
-  bike: { mtb: 3, bicycle: 2.6 },
-};
+// Which route types are shown and how strongly each is preferred.
+const ROUTE_WEIGHTS = { running: 3, fitness_trail: 3, nordic: 2.5, path: 1.8, hiking: 1.4, foot: 1.4, walking: 1.4 };
 
 // ---------- State ----------
 const state = {
-  activity: 'run',
   min: 5,
   max: 7,
   sort: 'popular',
@@ -39,6 +33,9 @@ const state = {
   fetchedRadiusKm: 0,
   routes: [],
   visible: [],
+  surfaceFilter: 'all',
+  litOnly: false,
+  generated: null,
   selectedId: null,
   hoverId: null,
   abort: null,
@@ -48,10 +45,12 @@ const $ = (id) => document.getElementById(id);
 const els = {
   list: $('routeList'), status: $('status'), count: $('resultCount'),
   minRange: $('minRange'), maxRange: $('maxRange'), rangeLabel: $('rangeLabel'), rangeFill: $('rangeFill'),
-  chips: $('presetChips'), seg: $('activitySeg'), sort: $('sortSelect'),
+  chips: $('presetChips'), sort: $('sortSelect'),
   detail: $('detail'), searchAreaBtn: $('searchAreaBtn'), locateBtn: $('locateBtn'),
   searchForm: $('searchForm'), searchInput: $('searchInput'), suggestions: $('suggestions'),
   panel: $('panel'), sheetHandle: $('sheetHandle'),
+  surfaceChips: $('surfaceChips'), litToggle: $('litToggle'), generateBtn: $('generateBtn'), generateKm: $('generateKm'),
+  installBtn: $('installBtn'),
 };
 
 // ---------- Geometry helpers ----------
@@ -231,19 +230,17 @@ map.on('moveend', () => {
 
 // ---------- Data: Overpass ----------
 // Relations are length-filtered server-side: long trails' full geometry makes the public servers time out.
-function buildQuery(bbox, activity, minKm, maxKm) {
+function buildQuery(bbox, minKm, maxKm) {
   const b = bbox.map((n) => n.toFixed(5)).join(',');
   const minM = Math.round(minKm * 1000 * 0.97);
   const lengthFilter = maxKm >= 40 ? `(if:length()>=${minM})` : `(if:length()>=${minM}&&length()<=${Math.round(maxKm * 1000 * 1.03)})`;
-  const parts = activity === 'bike'
-    ? [`relation["route"~"^(bicycle|mtb)$"](${b})${lengthFilter};`]
-    : [
-      `relation["route"~"^(running|fitness_trail|hiking|foot|walking)$"](${b})${lengthFilter};`,
-      `way["route"~"^(running|fitness_trail)$"](${b});`,
-      `way["piste:type"="nordic"]["name"](${b});`,
-      `way["highway"~"^(path|track|footway|bridleway)$"]["name"~"spår|slinga|motionsspår|elljus|leden|trail",i](${b});`,
-    ];
-  return `[out:json][timeout:45];(${parts.join('')});out geom qt;`;
+  const ways = [
+    `way["route"~"^(running|fitness_trail)$"](${b});`,
+    `way["piste:type"="nordic"]["name"](${b});`,
+    `way["highway"~"^(path|track|footway|bridleway)$"]["name"~"spår|slinga|motionsspår|elljus|leden|trail",i](${b});`,
+  ];
+  // Member ways are also returned tags-only, to derive each relation's surface and lighting.
+  return `[out:json][timeout:45];relation["route"~"^(running|fitness_trail|hiking|foot|walking)$"](${b})${lengthFilter}->.rels;(.rels;${ways.join('')});out geom qt;way(r.rels);out tags qt;`;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -278,13 +275,13 @@ async function fetchOverpass(query, signal) {
 }
 
 const areaCache = new Map();
-async function fetchRoutesCached(center, radius, activity, minKm, maxKm, signal) {
-  const key = `${activity}|${center[0].toFixed(3)}|${center[1].toFixed(3)}|${radius.toFixed(1)}|${minKm}|${maxKm}`;
+async function fetchRoutesCached(center, radius, minKm, maxKm, signal) {
+  const key = `${center[0].toFixed(3)}|${center[1].toFixed(3)}|${radius.toFixed(1)}|${minKm}|${maxKm}`;
   if (!areaCache.has(key)) {
     const bbox = boundsAround(center, radius);
     const warn = (source) => (err) => { console.warn(`${source}:`, err); return []; };
     const [data, officialTrails, parkruns] = await Promise.all([
-      fetchOverpass(buildQuery(bbox, activity, minKm, maxKm), signal),
+      fetchOverpass(buildQuery(bbox, minKm, maxKm), signal),
       fetchOfficialTrails(bbox, signal).catch(warn('Naturvårdsverket')),
       loadParkrunEvents().catch(warn('parkrun')),
     ]);
@@ -302,8 +299,7 @@ const OFFICIAL_MATCH_SHARE = 0.6;
 
 function nvRouteType(trailType) {
   const t = trailType || '';
-  if (/skid|snö|skoter|rid|kanot|paddel/i.test(t)) return null; // Not usable on foot or by bike in summer.
-  if (/cykel/i.test(t)) return 'bicycle';
+  if (/skid|snö|skoter|rid|kanot|paddel|cykel/i.test(t)) return null; // Not usable on foot in summer.
   if (/motion|elljus/i.test(t)) return 'fitness_trail';
   return 'hiking';
 }
@@ -410,17 +406,23 @@ function routeTypeOf(tags) {
 function parseElements(elements) {
   const routes = [];
   const wayIdsInRelations = new Set();
+  const wayTags = new Map();
+  for (const el of elements) if (el.type === 'way' && el.tags) wayTags.set(el.id, el.tags);
 
   for (const el of elements) {
     if (el.type !== 'relation') continue;
-    const segments = [];
+    const segments = [], segmentTags = [];
     for (const m of el.members || []) {
       if (m.type !== 'way' || !m.geometry || m.geometry.length < 2) continue;
       if (m.role === 'backward') continue; // Avoid counting one-way return legs twice.
       wayIdsInRelations.add(m.ref);
       segments.push(m.geometry.filter(Boolean).map((p) => [p.lat, p.lon]));
+      segmentTags.push(wayTags.get(m.ref) || {});
     }
-    if (segments.length) routes.push(makeRoute(`r${el.id}`, el.tags || {}, segments, { url: `https://www.openstreetmap.org/relation/${el.id}`, label: 'Visa i OSM' }));
+    if (!segments.length) continue;
+    const route = makeRoute(`r${el.id}`, el.tags || {}, segments, { url: `https://www.openstreetmap.org/relation/${el.id}`, label: 'Visa i OSM' });
+    Object.assign(route, surfaceAndLighting(segments, segmentTags, el.tags || {}));
+    routes.push(route);
   }
 
   // Named ways without a route relation: group connected ways sharing the same name.
@@ -436,10 +438,46 @@ function parseElements(elements) {
     for (const group of connectedGroups(ways)) {
       const segments = group.map((w) => w.geometry.map((p) => [p.lat, p.lon]));
       const first = group[0];
-      routes.push(makeRoute(`w${first.id}`, first.tags || {}, segments, { url: `https://www.openstreetmap.org/way/${first.id}`, label: 'Visa i OSM' }));
+      const route = makeRoute(`w${first.id}`, first.tags || {}, segments, { url: `https://www.openstreetmap.org/way/${first.id}`, label: 'Visa i OSM' });
+      Object.assign(route, surfaceAndLighting(segments, group.map((w) => w.tags || {}), first.tags || {}));
+      routes.push(route);
     }
   }
   return routes;
+}
+
+const SURFACE_CLASSES = {
+  paved: /^(asphalt|paved|concrete|concrete:plates|paving_stones|sett|chipseal|metal|wood)$/,
+  gravel: /^(gravel|fine_gravel|compacted|pebblestone)$/,
+  trail: /^(dirt|ground|earth|grass|mud|sand|unpaved|rock|roots|woodchips|forest_floor)$/,
+};
+
+// Untagged surfaces are inferred from the way type, which is usually right in Swedish OSM data.
+function surfaceClassOf(tags) {
+  const surface = tags.surface || '';
+  for (const [cls, re] of Object.entries(SURFACE_CLASSES)) if (re.test(surface)) return cls;
+  if (tags.tracktype === 'grade1') return 'paved';
+  if (tags.highway === 'track') return 'gravel';
+  if (tags.highway === 'path' || tags.highway === 'bridleway') return 'trail';
+  if (tags.highway) return 'paved';
+  return null;
+}
+
+// Dominant surface and lighting by length share across the route's ways.
+function surfaceAndLighting(segments, segmentTags, routeTags) {
+  const bySurface = {}; let litLength = 0, total = 0;
+  segments.forEach((seg, i) => {
+    const length = lineLength(seg), tags = segmentTags[i];
+    total += length;
+    const cls = surfaceClassOf(tags);
+    if (cls) bySurface[cls] = (bySurface[cls] || 0) + length;
+    if (tags.lit && tags.lit !== 'no') litLength += length;
+  });
+  const [surface, surfaceLength] = Object.entries(bySurface).sort((a, b) => b[1] - a[1])[0] || [null, 0];
+  return {
+    surface: surfaceLength >= total * 0.4 ? surface : null,
+    lit: routeTags.lit === 'yes' || /elljus/i.test(routeTags.name || '') || (total > 0 && litLength >= total * 0.6),
+  };
 }
 
 function connectedGroups(ways) {
@@ -481,7 +519,7 @@ function popularityScore(route, weights) {
   const t = route.tags;
   let score = weights[route.type] || 0;
   if (t.name) score += 0.8;
-  if (t.lit === 'yes' || route.type === 'nordic' || /elljus/i.test(t.name || '')) score += 1;
+  if (route.lit || route.type === 'nordic') score += 1;
   if (route.isLoop) score += 1;
   if (t.network === 'lwn' || t.network === 'rwn' || t.network === 'lcn' || t.network === 'rcn') score += 0.5;
   if (t.website || t.wikidata || t.wikipedia || t.description || t.operator) score += 0.5;
@@ -489,7 +527,7 @@ function popularityScore(route, weights) {
   // Real usage outweighs tag heuristics: 1 trace ≈ +0.9, 3 ≈ +1.8, 15 ≈ +3.6.
   if (route.traces?.matches) score += Math.log2(1 + route.traces.matches) * 0.9;
   if (route.official) score += 1.2;
-  if (route.parkrun && state.activity !== 'bike') score += 1.5;
+  if (route.parkrun) score += 1.5;
   const distKm = route.distanceFromCenter / 1000;
   score -= distKm * 0.15;
   return score;
@@ -576,7 +614,7 @@ let traceRun = 0;
 async function loadTracePopularity() {
   const run = ++traceRun;
   state.routes.forEach((r) => { r.tracesPending = false; });
-  const queue = [...state.visible].sort((a, b) => b.score - a.score).slice(0, TRACE_MAX_ROUTES).filter((r) => !r.traces);
+  const queue = [...state.visible].filter((r) => !r.generated).sort((a, b) => b.score - a.score).slice(0, TRACE_MAX_ROUTES).filter((r) => !r.traces);
   if (!queue.length) return;
   queue.forEach((r) => { r.tracesPending = true; });
   renderList();
@@ -627,6 +665,8 @@ async function loadRoutes(center, { fitView = false } = {}) {
   state.abort = controller;
 
   const radius = radiusForMax(state.max);
+  // A generated loop belongs to its area; drop it when the search moves elsewhere.
+  if (state.generated && haversine(center, state.generated.path[0]) > 2000) state.generated = null;
   state.searchCenter = center;
   state.fetchedRadiusKm = radius;
   els.searchAreaBtn.hidden = true;
@@ -634,7 +674,7 @@ async function loadRoutes(center, { fitView = false } = {}) {
   showLoading();
 
   try {
-    const routes = await fetchRoutesCached(center, radius, state.activity, state.min, state.max, controller.signal);
+    const routes = await fetchRoutesCached(center, radius, state.min, state.max, controller.signal);
     if (controller.signal.aborted) return;
     state.routes = routes;
     applyFilters({ fitView });
@@ -652,16 +692,21 @@ async function loadRoutes(center, { fitView = false } = {}) {
 
 function applyFilters({ fitView = false } = {}) {
   if (!state.searchCenter) return;
-  const weights = ACTIVITY_WEIGHTS[state.activity];
+  const weights = ROUTE_WEIGHTS;
   const center = state.searchCenter;
   const minM = state.min * 1000, maxM = state.max >= 40 ? Infinity : state.max * 1000;
 
   state.visible = state.routes
     .filter((r) => weights[r.type] != null && r.length >= minM && r.length <= maxM)
+    .filter((r) => (state.surfaceFilter === 'all' || r.surface === state.surfaceFilter) && (!state.litOnly || r.lit))
     .map((r) => {
       r.distanceFromCenter = Math.min(...[r.path[0], r.centroid].map((p) => haversine(center, p)));
       return r;
     });
+  if (state.generated) {
+    state.generated.distanceFromCenter = haversine(center, state.generated.path[0]);
+    state.visible.unshift(state.generated);
+  }
 
   scoreVisible();
   sortVisible();
@@ -670,9 +715,12 @@ function applyFilters({ fitView = false } = {}) {
 
   if (!state.visible.length) {
     const any = state.routes.some((r) => weights[r.type] != null);
-    setStatus(any
-      ? `Inga rundor på ${fmtRange(state.min, state.max)} här. Prova ett annat distansintervall eller flytta kartan.`
-      : 'Hittade inga kartlagda rundor i området. Flytta kartan eller sök på en annan plats.');
+    const filtered = state.surfaceFilter !== 'all' || state.litOnly;
+    setStatus(filtered
+      ? 'Inga rundor matchar underlag/belysning här. Prova att ta bort ett filter – eller skapa en egen runda.'
+      : any
+        ? `Inga rundor på ${fmtRange(state.min, state.max)} här. Prova ett annat distansintervall, flytta kartan eller skapa en egen runda.`
+        : 'Hittade inga kartlagda rundor i området. Flytta kartan, sök på en annan plats eller skapa en egen runda.');
   } else {
     setStatus('');
   }
@@ -685,9 +733,9 @@ function applyFilters({ fitView = false } = {}) {
 }
 
 function scoreVisible() {
-  const weights = ACTIVITY_WEIGHTS[state.activity];
+  const weights = ROUTE_WEIGHTS;
   state.visible.forEach((r) => { r.score = popularityScore(r, weights); });
-  const byScore = [...state.visible].sort((a, b) => b.score - a.score);
+  const byScore = state.visible.filter((r) => !r.generated).sort((a, b) => b.score - a.score);
   const popularIds = new Set(byScore.slice(0, TOP_POPULAR).map((r) => r.id));
   state.visible.forEach((r) => { r.popular = popularIds.has(r.id); });
 }
@@ -698,7 +746,7 @@ function sortVisible() {
     near: (a, b) => a.distanceFromCenter - b.distanceFromCenter,
     length: (a, b) => a.length - b.length,
   }[state.sort];
-  state.visible.sort(cmp);
+  state.visible.sort((a, b) => Number(!!b.generated) - Number(!!a.generated) || cmp(a, b));
 }
 
 // ---------- Rendering ----------
@@ -729,14 +777,12 @@ function thumbnailSvg(path) {
 function subtitle(r) {
   const parts = [TYPE_LABELS[r.type]];
   if (r.isLoop) parts.push('Slinga');
-  if (r.tags.lit === 'yes') parts.push('Belyst');
-  if (r.tags.surface) parts.push(surfaceLabel(r.tags.surface));
+  if (r.lit) parts.push('Belyst');
+  if (r.surface) parts.push(SURFACE_LABELS[r.surface]);
   return parts.filter(Boolean).join(' · ');
 }
 
-function surfaceLabel(surface) {
-  return ({ asphalt: 'Asfalt', paved: 'Asfalt', gravel: 'Grus', fine_gravel: 'Grus', compacted: 'Grus', dirt: 'Jord', ground: 'Terräng', grass: 'Gräs', wood: 'Trä' })[surface] || '';
-}
+const SURFACE_LABELS = { paved: 'Asfalt', gravel: 'Grus', trail: 'Stig/terräng' };
 
 function renderList() {
   const n = state.visible.length;
@@ -745,7 +791,7 @@ function renderList() {
     <li class="route${r.id === state.selectedId ? ' selected' : ''}" data-id="${r.id}" tabindex="0">
       ${thumbnailSvg(r.path)}
       <div>
-        <div class="route-title"><span>${escapeHtml(r.name)}</span>${r.popular ? '<em class="badge">Populär</em>' : ''}</div>
+        <div class="route-title"><span>${escapeHtml(r.name)}</span>${r.generated ? '<em class="badge generated">Egen</em>' : r.popular ? '<em class="badge">Populär</em>' : ''}</div>
         <div class="route-sub">${escapeHtml(subtitle(r))}</div>
         ${sourceTags(r)}
         <div class="route-stats"><span><b>${fmtKm(r.length)}</b></span><span>${fmtKm(r.distanceFromCenter)} bort</span><span class="trace-stat${r.tracesPending ? ' pending' : ''}">${traceLabel(r)}</span></div>
@@ -848,11 +894,13 @@ function renderDetail(r) {
     <div class="detail-actions">
       <a class="btn primary" href="${directions}" target="_blank" rel="noopener">Vägbeskrivning till start</a>
       <button class="btn" type="button" id="gpxBtn">Ladda ner GPX</button>
-      <a class="btn" href="${r.source.url}" target="_blank" rel="noopener">${r.source.label}</a>
+      ${r.generated ? '<button class="btn" type="button" id="variantBtn">Ny variant</button>' : ''}
+      ${r.source ? `<a class="btn" href="${r.source.url}" target="_blank" rel="noopener">${r.source.label}</a>` : ''}
     </div>`;
   els.detail.hidden = false;
   els.detail.querySelector('.close-btn').addEventListener('click', () => clearSelection());
   els.detail.querySelector('#gpxBtn').addEventListener('click', () => downloadGpx(r));
+  els.detail.querySelector('#variantBtn')?.addEventListener('click', () => createGeneratedRoute());
   if (r.elevation) drawElevation(r);
 }
 
@@ -951,6 +999,7 @@ ${pts}
 // ---------- Filters UI ----------
 function updateRangeUi() {
   els.rangeLabel.textContent = fmtRange(state.min, state.max);
+  els.generateKm.textContent = `${fmt1.format(generatedTargetKm())} km`;
   const lo = (state.min - 1) / 39 * 100, hi = (state.max - 1) / 39 * 100;
   els.rangeFill.style.left = `${lo}%`;
   els.rangeFill.style.right = `${100 - hi}%`;
@@ -984,13 +1033,6 @@ els.chips.addEventListener('click', (e) => {
   state.min = +b.dataset.min; state.max = +b.dataset.max;
   els.minRange.value = state.min; els.maxRange.value = state.max;
   onRangeChanged();
-});
-els.seg.addEventListener('click', (e) => {
-  const b = e.target.closest('button');
-  if (!b || b.dataset.activity === state.activity) return;
-  state.activity = b.dataset.activity;
-  els.seg.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
-  if (state.searchCenter) loadRoutes(state.searchCenter);
 });
 els.sort.addEventListener('change', () => {
   state.sort = els.sort.value;
@@ -1118,6 +1160,114 @@ els.suggestions.addEventListener('mousedown', (e) => {
   if (li) { e.preventDefault(); choosePlace(suggestions[+li.dataset.i]); }
 });
 els.searchInput.addEventListener('blur', () => setTimeout(() => { els.suggestions.hidden = true; }, 150));
+
+// ---------- Surface and lighting filters ----------
+els.surfaceChips.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.surface === state.surfaceFilter) return;
+  state.surfaceFilter = b.dataset.surface;
+  els.surfaceChips.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+  clearSelection(false);
+  applyFilters();
+});
+els.litToggle.addEventListener('change', () => {
+  state.litOnly = els.litToggle.checked;
+  clearSelection(false);
+  applyFilters();
+});
+
+// ---------- Generated loops (FOSSGIS OSRM foot routing) ----------
+const ROUTING_URL = 'https://routing.openstreetmap.de/routed-foot/route/v1/driving';
+const LOOP_TOLERANCE = 0.03;
+const LOOP_MAX_ATTEMPTS = 5;
+
+function generatedTargetKm() {
+  return state.max >= 40 ? state.min : Math.round(state.min + state.max) / 2;
+}
+
+function destinationPoint([lat, lon], distanceM, bearingDeg) {
+  const rad = Math.PI / 180, d = distanceM / 6371000, b = bearingDeg * rad;
+  const lat1 = lat * rad, lon1 = lon * rad;
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(b));
+  const lon2 = lon1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+  return [lat2 / rad, lon2 / rad];
+}
+
+async function routeThrough(points) {
+  const coords = points.map(([lat, lon]) => `${lon.toFixed(6)},${lat.toFixed(6)}`).join(';');
+  const res = await fetch(`${ROUTING_URL}/${coords}?overview=full&geometries=geojson&continue_straight=true`);
+  if (!res.ok) throw new Error(`Ruttjänsten svarade ${res.status}`);
+  const data = await res.json();
+  if (data.code !== 'Ok' || !data.routes?.length) throw new Error(`Ruttjänsten hittade ingen väg (${data.code})`);
+  return { distance: data.routes[0].distance, path: data.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]) };
+}
+
+// Start -> three points on a circle through the start -> start; the circle is rescaled until the
+// walked distance is within tolerance, since roads never follow the circle exactly.
+async function generateLoop(start, targetM, bearing) {
+  let factor = 0.75, best = null;
+  for (let attempt = 0; attempt < LOOP_MAX_ATTEMPTS; attempt++) {
+    const radius = (targetM * factor) / (2 * Math.PI);
+    const center = destinationPoint(start, radius, bearing);
+    const waypoints = [90, 180, 270].map((angle) => destinationPoint(center, radius, bearing + 180 + angle));
+    const result = await routeThrough([start, ...waypoints, start]);
+    if (!best || Math.abs(result.distance - targetM) < Math.abs(best.distance - targetM)) best = result;
+    if (Math.abs(result.distance - targetM) <= targetM * LOOP_TOLERANCE) break;
+    factor *= targetM / result.distance;
+  }
+  return best;
+}
+
+let generating = false;
+async function createGeneratedRoute() {
+  if (generating) return;
+  generating = true;
+  const fromUser = !!state.userPos;
+  const start = state.userPos || [map.getCenter().lat, map.getCenter().lng];
+  const targetM = generatedTargetKm() * 1000;
+  els.generateBtn.disabled = true;
+  els.generateBtn.classList.add('busy');
+  setStatus(`Skapar en runda på ${fmt1.format(targetM / 1000)} km från ${fromUser ? 'din position' : 'kartans mitt'}…`);
+  try {
+    const loop = await generateLoop(start, targetM, Math.random() * 360);
+    const route = makeRoute(`gen${Date.now()}`, { route: 'generated', name: `Egen runda ${fmtKm(loop.distance)}` }, [loop.path], null);
+    route.generated = true;
+    route.isLoop = true;
+    if (!state.searchCenter) state.searchCenter = start;
+    state.generated = route;
+    clearSelection(false);
+    applyFilters();
+    selectRoute(route.id, { fit: true });
+    setStatus(fromUser ? '' : 'Rundan utgår från kartans mitt – tillåt platsåtkomst för att starta där du är.');
+  } catch (err) {
+    console.warn(err);
+    setStatus('Kunde inte skapa en runda just nu. Försök igen, eller flytta kartan till ett område med gångvägar.', true);
+  } finally {
+    generating = false;
+    els.generateBtn.disabled = false;
+    els.generateBtn.classList.remove('busy');
+  }
+}
+els.generateBtn.addEventListener('click', () => createGeneratedRoute());
+
+// ---------- Installable app (PWA) ----------
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  els.installBtn.hidden = false;
+});
+els.installBtn.addEventListener('click', async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  els.installBtn.hidden = true;
+});
+window.addEventListener('appinstalled', () => { els.installBtn.hidden = true; });
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service worker:', err)));
+}
 
 // ---------- Start ----------
 updateRangeUi();

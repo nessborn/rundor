@@ -4,10 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Rundor nära dig</title>
-  <meta name="description" content="Hitta populära löp-, promenad- och cykelrundor nära dig, baserat på öppen data från OpenStreetMap.">
+  <meta name="description" content="Hitta populära löp- och promenadrundor nära dig, baserat på öppen data från OpenStreetMap.">
   <meta name="theme-color" content="#fc4c02">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Rundor">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
   <div id="app">
@@ -18,6 +25,7 @@
         <input id="searchInput" type="search" placeholder="Sök plats, t.ex. Hagaparken" aria-label="Sök plats" aria-autocomplete="list" aria-controls="suggestions">
         <ul id="suggestions" class="suggestions" role="listbox" hidden></ul>
       </form>
+      <button id="installBtn" class="install-btn" type="button" hidden>Installera</button>
       <button id="locateBtn" class="icon-btn" type="button" title="Min position" aria-label="Gå till min position">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm-1-7h2v3.06A8 8 0 0 1 19.94 11H23v2h-3.06A8 8 0 0 1 13 19.94V23h-2v-3.06A8 8 0 0 1 4.06 13H1v-2h3.06A8 8 0 0 1 11 4.06V1Zm1 5a6 6 0 1 0 0 12 6 6 0 0 0 0-12Z"/></svg>
       </button>
@@ -28,12 +36,6 @@
         <button class="sheet-handle" id="sheetHandle" type="button" aria-label="Visa fler rundor"><span></span></button>
 
         <section class="filters">
-          <div class="seg" id="activitySeg" role="radiogroup" aria-label="Aktivitet">
-            <button type="button" role="radio" data-activity="run" aria-checked="true">Löpning</button>
-            <button type="button" role="radio" data-activity="walk" aria-checked="false">Promenad</button>
-            <button type="button" role="radio" data-activity="bike" aria-checked="false">Cykel</button>
-          </div>
-
           <div class="range-block">
             <div class="range-head"><span>Distans</span><strong id="rangeLabel">5–7 km</strong></div>
             <div class="dual-range">
@@ -48,6 +50,18 @@
               <button type="button" data-min="13" data-max="21">13–21</button>
               <button type="button" data-min="21" data-max="40">21+</button>
             </div>
+          </div>
+
+          <div class="chips surface-chips" id="surfaceChips" role="radiogroup" aria-label="Underlag">
+            <button type="button" role="radio" data-surface="all" aria-checked="true">Alla underlag</button>
+            <button type="button" role="radio" data-surface="paved" aria-checked="false">Asfalt</button>
+            <button type="button" role="radio" data-surface="gravel" aria-checked="false">Grus</button>
+            <button type="button" role="radio" data-surface="trail" aria-checked="false">Stig/terräng</button>
+          </div>
+
+          <div class="filter-row">
+            <label class="toggle"><input type="checkbox" id="litToggle"><span>Bara belysta</span></label>
+            <button type="button" class="btn primary generate-btn" id="generateBtn">Skapa egen runda <span id="generateKm">6 km</span></button>
           </div>
 
           <div class="list-head">
@@ -86,6 +100,6 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>
